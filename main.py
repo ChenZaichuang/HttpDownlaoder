@@ -340,7 +340,7 @@ if __name__ == '__main__':
     url = args[1]
     if len(args) == 3:
         thread_number = int(args[2])
-    else:
+    elif len(args) == 4:
         thread_number = int(args[2])
         file_name = args[3]
 
