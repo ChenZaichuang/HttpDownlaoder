@@ -14,6 +14,7 @@ import pickle
 import signal
 import sys
 import requests
+import argparse
 
 requests.packages.urllib3.disable_warnings()
 
@@ -299,14 +300,14 @@ class HttpMultiThreadDownloader:
 
 def http_download(url=None, path_to_store=None, file_name=None, thread_number=None):
 
-    assert url is not None or file_name is not None
+    assert url or file_name
 
-    file_name = file_name if file_name is not None else url.split('?')[0].split('/')[-1]
+    file_name = file_name if file_name else url.split('?')[0].split('/')[-1]
     file_name_split = file_name.split('.')
     if len(file_name_split[0]) > 64:
         file_name_split[0] = file_name_split[0][:64]
     file_name = '.'.join(file_name_split)
-    path_to_store = path_to_store if path_to_store is not None else f"{os.environ['HOME']}/Downloads"
+    path_to_store = path_to_store if path_to_store else f"{os.environ['HOME']}/Downloads"
     file_path = path_to_store + '/' + file_name
     breakpoint_file_path = file_path + '.tmp'
 
@@ -329,19 +330,17 @@ def http_download(url=None, path_to_store=None, file_name=None, thread_number=No
             sys.stdout.write(f'Not support multi thread: {url}\n')
 
 
-
 if __name__ == '__main__':
-    args = sys.argv
-    assert len(args) in (2, 3, 4)
 
-    thread_number = None
-    file_name = None
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-t", '--thread_number', type=int, dest="thread_number", help="Thread number to download", default=32)
+    parser.add_argument("-p", "--path", type=str, dest="path",  help="Path to store file", default=None)
+    parser.add_argument('-f', "--file_name", type=str, dest="file_name", help='Filename to save', default=None)
+    args = parser.parse_args()
 
-    url = args[1]
-    if len(args) == 3:
-        thread_number = int(args[2])
-    elif len(args) == 4:
-        thread_number = int(args[2])
-        file_name = args[3]
+    required_args = sys.argv
+    assert len(required_args) == 1
 
-    http_download(url=url, thread_number=thread_number, file_name=file_name)
+    url = required_args[0]
+
+    http_download(url=url, thread_number=args.thread_number, file_name=args.file_name, path_to_store=args.path)
