@@ -15,6 +15,7 @@ import signal
 import sys
 import requests
 import argparse
+import logging
 
 requests.packages.urllib3.disable_warnings()
 
@@ -27,11 +28,22 @@ class HttpMultiThreadDownloader:
     MIN_TASK_CHUNK_SIZE = 1 * CHUNK_SIZE
     DEFAULT_THREAD_NUMBER = 32
 
-    def __init__(self, url=None, total_size=None, file_name_with_path=None, thread_number=None):
+    def __init__(self, url=None, file_name=None, path_to_store=None, total_size=None, thread_number=None, logger=None, print_progress=False):
 
+        assert url or file_name
+
+        file_name = file_name if file_name else url.split('?')[0].split('/')[-1]
+        file_name_split = file_name.split('.')
+        if len(file_name_split[0]) > 64:
+            file_name_split[0] = file_name_split[0][:64]
+        file_name = '.'.join(file_name_split)
+        path_to_store = path_to_store if path_to_store else f"{os.environ['HOME']}/Downloads"
+
+        self.logger = logger or logging
+        self.print_progress = print_progress
         self.url = url
         self.total_size = total_size
-        self.file_name_with_path = file_name_with_path
+        self.file_name_with_path = path_to_store + '/' + file_name
         self.breakpoint_file_path = self.file_name_with_path + '.tmp'
         self.file_seeker = None
         self.thread_number = thread_number
@@ -41,6 +53,7 @@ class HttpMultiThreadDownloader:
         self.segment_dispatch_task = None
         self.speed_calculation_task = None
         self.bytearray_of_threads = None
+        self.last_progress_time = None
         self.last_downloaded_size = 0
         self.workers = []
         self.coworker_end_to_indexes_map = dict()
@@ -48,6 +61,21 @@ class HttpMultiThreadDownloader:
         self.complete_notify_lock = Lock()
 
         self.download_info = self.get_download_info()
+
+    def get_total_size(self):
+        while True:
+            try:
+                with gevent.Timeout(10):
+                    res = requests.get(self.url, stream=True, verify=False, headers={"User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.149 Safari/537.36", 'Accept-Language':'zh-CN,zh;q=0.9'})
+                break
+            except KeyboardInterrupt:
+                os.kill(os.getpid(),signal.SIGTERM)
+            except (gevent.timeout.Timeout,requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
+                self.logger.error(traceback.format_exc())
+        if res.status_code == 200 and 'Content-Length' in res.headers:
+            return int(res.headers['Content-Length'])
+        else:
+            raise RuntimeError(f'Not support multi thread: {self.url}')
 
     def get_download_info(self):
         if os.path.exists(self.file_name_with_path) and os.path.exists(self.breakpoint_file_path):
@@ -67,13 +95,7 @@ class HttpMultiThreadDownloader:
             self.url = info_map['url']
         else:
             if self.total_size is None:
-                while True:
-                    try:
-                        with gevent.Timeout(5):
-                            self.total_size = int(requests.get(self.url, stream=True, verify=False).headers['Content-Length'])
-                        break
-                    except:
-                        pass
+                self.total_size = self.get_total_size()
             info_map = {
                 'url': self.url,
                 'thread_number': self.thread_number,
@@ -130,25 +152,39 @@ class HttpMultiThreadDownloader:
                     new_tmp.append([start, end])
         remaining_size = sum([end - start for [start, end] in new_tmp])
         downloaded_size = self.total_size - remaining_size
+
+        current_time = datetime.datetime.now()
+        seconds = (current_time - self.start_time).seconds
+
         if do_init:
+            self.last_progress_time = seconds + 0.001
             self.last_downloaded_size = downloaded_size
         if downloaded_size < self.last_downloaded_size:
             downloaded_size = self.last_downloaded_size
-        downloaded_size_in_1_second = downloaded_size - self.last_downloaded_size
+        downloaded_size_in_period = downloaded_size - self.last_downloaded_size
         self.last_downloaded_size = downloaded_size
         finish_percent = math.floor(downloaded_size / self.total_size * 10000) / 10000
 
-        done = math.floor(50 * finish_percent)
-        current_time = datetime.datetime.now()
-        seconds = (current_time - self.start_time).seconds
-        sys.stdout.write("\r[%s%s] %.2f%% %.2fMB|%.2fMB %.3fMB/s %ds" % ('█' * done, ' ' * (50 - done), 100 * finish_percent, math.floor(downloaded_size / 1024 / 10.24) / 100, math.floor(self.total_size / 1024 / 10.24) / 100, math.floor(downloaded_size_in_1_second / 1024 / 1.024) / 1000, seconds))
-        sys.stdout.flush()
-        return finish_percent == 1
+        return {
+            'total_size': self.total_size,
+            'downloaded_size': downloaded_size,
+            'downloaded_size_in_period': downloaded_size_in_period,
+            'finish_percent': finish_percent,
+            'realtime_speed': downloaded_size_in_period / (seconds - self.last_progress_time),
+            'total_seconds': seconds
+        }
 
     def calculate_realtime_speed(self):
         while True:
             sleep(1)
-            if self.calculate_realtime_speed_once():
+            progress = self.calculate_realtime_speed_once()
+            finish_percent = progress['finish_percent']
+            done = math.floor(50 * finish_percent)
+
+            sys.stdout.write("\r[%s%s] %.2f%% %.2fMB|%.2fMB %.3fMB/s %ds" % ('█' * done, ' ' * (50 - done), 100 * finish_percent, math.floor(progress['downloaded_size'] / 1024 / 10.24) / 100, math.floor(self.total_size / 1024 / 10.24) / 100, math.floor(progress['downloaded_size_in_period'] / 1024 / 1.024) / 1000, progress['total_seconds']))
+            sys.stdout.flush()
+
+            if finish_percent == 1:
                 break
 
     def store_segment(self, start, data):
@@ -282,13 +318,15 @@ class HttpMultiThreadDownloader:
 
         self.start_time = datetime.datetime.now()
         self.calculate_realtime_speed_once(do_init=True)
-        self.speed_calculation_task = gevent.spawn(self.calculate_realtime_speed)
+        if self.print_progress:
+            self.speed_calculation_task = gevent.spawn(self.calculate_realtime_speed)
         self.segment_dispatch_task = gevent.spawn(self.dispatch_segment)
 
         for index in range(self.thread_number):
             self.workers.append(gevent.spawn(self.start_download_task, index, 'worker'))
         try:
-            self.speed_calculation_task.join()
+            if self.print_progress:
+                self.speed_calculation_task.join()
             self.segment_dispatch_task.kill()
             self.file_seeker.flush()
             self.file_seeker.close()
@@ -296,38 +334,6 @@ class HttpMultiThreadDownloader:
         except KeyboardInterrupt:
             self.store_breakpoint()
         sys.stdout.write('\n')
-
-
-def http_download(url=None, path_to_store=None, file_name=None, thread_number=None):
-
-    assert url or file_name
-
-    file_name = file_name if file_name else url.split('?')[0].split('/')[-1]
-    file_name_split = file_name.split('.')
-    if len(file_name_split[0]) > 64:
-        file_name_split[0] = file_name_split[0][:64]
-    file_name = '.'.join(file_name_split)
-    path_to_store = path_to_store if path_to_store else f"{os.environ['HOME']}/Downloads"
-    file_path = path_to_store + '/' + file_name
-    breakpoint_file_path = file_path + '.tmp'
-
-    if os.path.exists(file_path) and os.path.exists(breakpoint_file_path):
-        HttpMultiThreadDownloader(url=url, file_name_with_path = path_to_store + '/' + file_name, thread_number=thread_number).download()
-    else:
-        while True:
-            try:
-                with gevent.Timeout(10):
-                    headers = requests.get(url, stream=True, verify=False, headers={"User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.149 Safari/537.36", 'Accept-Language':'zh-CN,zh;q=0.9'}).headers
-                break
-            except KeyboardInterrupt:
-                os.kill(os.getpid(),signal.SIGTERM)
-            except (gevent.timeout.Timeout,requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
-                print(traceback.format_exc())
-                pass
-        if 'Content-Length' in headers:
-            HttpMultiThreadDownloader(url, total_size=int(headers['Content-Length']), file_name_with_path = path_to_store + '/' + file_name, thread_number=thread_number).download()
-        else:
-            sys.stdout.write(f'Not support multi thread: {url}\n')
 
 
 if __name__ == '__main__':
@@ -339,4 +345,4 @@ if __name__ == '__main__':
     parser.add_argument('url')
     args = parser.parse_args()
 
-    http_download(url=args.url, thread_number=args.thread_number, file_name=args.file_name, path_to_store=args.path)
+    HttpMultiThreadDownloader(url=args.url, thread_number=args.thread_number, file_name=args.file_name, path_to_store=args.path, print_progress=True).download()
