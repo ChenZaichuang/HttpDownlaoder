@@ -336,11 +336,7 @@ if __name__ == '__main__':
     parser.add_argument("-t", '--thread_number', type=int, dest="thread_number", help="Thread number to download", default=32)
     parser.add_argument("-p", "--path", type=str, dest="path",  help="Path to store file", default=None)
     parser.add_argument('-f', "--file_name", type=str, dest="file_name", help='Filename to save', default=None)
+    parser.add_argument('url')
     args = parser.parse_args()
 
-    required_args = sys.argv
-    assert len(required_args) == 1
-
-    url = required_args[0]
-
-    http_download(url=url, thread_number=args.thread_number, file_name=args.file_name, path_to_store=args.path)
+    http_download(url=args.url, thread_number=args.thread_number, file_name=args.file_name, path_to_store=args.path)
