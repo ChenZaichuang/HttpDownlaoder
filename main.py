@@ -1,3 +1,5 @@
+import subprocess
+
 import gevent
 from gevent import monkey
 monkey.patch_all(thread=False)
@@ -37,13 +39,13 @@ class HttpMultiThreadDownloader:
         if len(file_name_split[0]) > 64:
             file_name_split[0] = file_name_split[0][:64]
         file_name = '.'.join(file_name_split)
-        path_to_store = path_to_store if path_to_store else f"{os.environ['HOME']}/Downloads"
+        self.path_to_store = path_to_store if path_to_store else f"{os.environ['HOME']}/Downloads"
 
         self.logger = logger or logging
         self.print_progress = print_progress
         self.url = url
         self.total_size = total_size
-        self.file_name_with_path = path_to_store + '/' + file_name
+        self.file_name_with_path = self.path_to_store + '/' + file_name
         self.breakpoint_file_path = self.file_name_with_path + '.tmp'
         self.file_seeker = None
         self.thread_number = thread_number
@@ -103,7 +105,9 @@ class HttpMultiThreadDownloader:
             }
             if self.thread_number is None:
                 self.thread_number = self.DEFAULT_THREAD_NUMBER
-
+            res = subprocess.Popen(f'mkdir -p {self.path_to_store}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode != 0:
+                raise RuntimeError(f'failed to create directory {self.path_to_store}: {res.stdout} | {res.stderr}')
             self.file_seeker = open(self.file_name_with_path, "w+b")
             if math.floor(self.total_size / self.CHUNK_SIZE) < self.thread_number:
                 self.thread_number = math.floor(self.total_size / self.CHUNK_SIZE)
