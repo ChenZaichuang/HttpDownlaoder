@@ -30,6 +30,8 @@ class HttpMultiThreadDownloader:
     MIN_TASK_CHUNK_SIZE = 1 * CHUNK_SIZE
     DEFAULT_THREAD_NUMBER = 32
 
+    headers = {"User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.149 Safari/537.36", 'Accept-Language':'zh-CN,zh;q=0.9'}
+
     def __init__(self, url=None, file_name=None, path_to_store=None, total_size=None, thread_number=None, logger=None, print_progress=False):
 
         assert url or file_name
@@ -68,13 +70,13 @@ class HttpMultiThreadDownloader:
         while True:
             try:
                 with gevent.Timeout(10):
-                    res = requests.get(self.url, stream=True, verify=False, headers={"User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.149 Safari/537.36", 'Accept-Language':'zh-CN,zh;q=0.9'})
+                    res = requests.get(self.url, stream=True, verify=False, headers=self.headers)
                 break
             except KeyboardInterrupt:
                 os.kill(os.getpid(),signal.SIGTERM)
             except (gevent.timeout.Timeout,requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
                 self.logger.error(traceback.format_exc())
-        if res.status_code == 200 and 'Content-Length' in res.headers:
+        if int(res.status_code / 100) == 2 and 'Content-Length' in res.headers:
             return int(res.headers['Content-Length'])
         else:
             raise RuntimeError(f'Not support multi thread: {self.url}')
@@ -105,9 +107,7 @@ class HttpMultiThreadDownloader:
             }
             if self.thread_number is None:
                 self.thread_number = self.DEFAULT_THREAD_NUMBER
-            res = subprocess.Popen(f'mkdir -p {self.path_to_store}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if res.returncode != 0:
-                raise RuntimeError(f'failed to create directory {self.path_to_store}: {res.stdout} | {res.stderr}')
+            subprocess.Popen(f'mkdir -p {self.path_to_store}', shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.file_seeker = open(self.file_name_with_path, "w+b")
             if math.floor(self.total_size / self.CHUNK_SIZE) < self.thread_number:
                 self.thread_number = math.floor(self.total_size / self.CHUNK_SIZE)
@@ -220,7 +220,7 @@ class HttpMultiThreadDownloader:
         while True:
             try:
                 with gevent.Timeout(5):
-                    headers = {'Range': 'bytes=%d-%d' % (start + data_length, end - 1)}
+                    headers = {**self.headers, 'Range': 'bytes=%d-%d' % (start + data_length, end - 1)}
                     r = requests.get(self.url, stream=True, verify=False, headers=headers)
                 status_code = r.status_code
                 assert status_code not in (200, 416)
